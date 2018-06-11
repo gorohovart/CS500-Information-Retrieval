@@ -3,6 +3,7 @@ package cs500ir.spark
 import java.io.ByteArrayInputStream
 
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.SparkContext._
 import info.bliki.wiki.dump.{IArticleFilter, Siteinfo, WikiArticle, WikiXMLParser}
 import info.bliki.wiki.filter.WikipediaParser
 import info.bliki.wiki.model.WikiModel
@@ -11,47 +12,123 @@ import org.apache.commons.lang3.StringEscapeUtils
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.io.{LongWritable, Text}
 import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.rdd.RDD
+import org.apache.spark.rdd.{PairRDDFunctions, RDD}
 import org.htmlcleaner.HtmlCleaner
 import org.xml.sax.SAXException
 
+import scala.io.Source
+import org.apache.spark.ml.feature.{HashingTF, IDF, Tokenizer}
+
 object HelloSpark {
   def main(args: Array[String]): Unit = {
-    //val spark = SparkSession
+    //val sparkSession = SparkSession
     //  .builder()
-    //  .appName("Spark SQL basic example")
-    //  .config("spark.some.config.option", "some-value")
+    //  .appName("HelloSpark")
+    //  .config("spark.master", "local")
     //  .getOrCreate()
 
     val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
-      .set("spark.executor.memory", "1g")
+      .set("spark.executor.memory", "2g")
 
     val sc    = new SparkContext( conf )
+    //import sc.implicits._
     //val qwe = new java.io.File(".").getCanonicalPath
     //val path = "file://" +"wikidump.xml".getPath
-    val stopWords = Source.fromFile(filename).getLines
-    val rawpages = readWikiDump(sc, "ruwiki-20180520-pages-articles-multistream.xml")
+    val stopWords = Source.fromFile("stopWords.txt").getLines()
+    val rawpages = readWikiDump(sc, "ruwiki-20180420-pages-articles-multistream.xml")
     //rawpages.saveAsTextFile("rubackup")
 
     val pages = parsePages(rawpages)
-      .map(x,y => y.text.split(" ").filter(x => ))
+    //val filteredPages =
+    //  pages.values.map(y =>
+    //    (y.id,
+    //      (y.title,
+    //       y.text.split(" ").filter(p=> p != "" && !stopWords.contains(p)))))
+
+    val numberOfDocs = pages.count()
+
+    val filteredPages =
+      pages.values.flatMap(y => tokenize(y.text, stopWords).map( s => (y.title,s)))//.toDF()
+
+    val termFrequency = filteredPages.countByValue()
+
+    val documentToTerm = filteredPages.distinct().map( x => (x._2,x._1))
+    val documentFrequency = documentToTerm.countByKey()
+
+    val tfIdf = termFrequency.flatMap( x => {
+      val doc = x._1._1
+      val term = x._1._2
+      val tf = x._2
+      val df = documentFrequency.get(term)
+      if (df.isDefined && df.get > 0){
+        val score = tf * scala.math.log(numberOfDocs / df.get)
+        Some(term, (doc,score))
+      }
+      else None
+    })
+
+    val tfidfRDD = sc.parallelize(tfIdf.toSeq)
+
+    /*val dataframe = sparkSession.createDataFrame(filteredPages).toDF("id", "title", "words")
 
     val hashingTF = new HashingTF()
-    val tf: RDD[Vector] = hashingTF.transform(pages)
+      .setInputCol("words").setOutputCol("rawFeatures").setNumFeatures(20)
 
-    // While applying HashingTF only needs a single pass to the data, applying IDF needs two passes:
-    // First to compute the IDF vector and second to scale the term frequencies by IDF.
-    tf.cache()
-    val idf = new IDF().fit(tf)
-    val tfidf: RDD[Vector] = idf.transform(tf)
+    val featurizedData = hashingTF.transform(dataframe)
+    // alternatively, CountVectorizer can also be used to get term frequency vectors
 
-    // spark.mllib IDF implementation provides an option for ignoring terms which occur in less than
-    // a minimum number of documents. In such cases, the IDF for these terms is set to 0.
-    // This feature can be used by passing the minDocFreq value to the IDF constructor.
-    val idfIgnore = new IDF(minDocFreq = 2).fit(tf)
-    val tfidfIgnore: RDD[Vector] = idfIgnore.transform(tf)
+    val idf = new IDF().setInputCol("rawFeatures").setOutputCol("features")
+    val idfModel = idf.fit(featurizedData)
+
+    val rescaledData = idfModel.transform(featurizedData)
+    //rescaledData.select("label", "features").show()
+*/
+    while (true) {
+      println()
+      println("Enter a sentence or 'q' to quit")
+      val input: String = Console.in.readLine()
+      if (input == "q")
+        System.exit(0)
+      println(s"Querying...")
+
+      val tokens = sc.parallelize(tokenize(input, stopWords)).map(x => (x,1)).collectAsMap()
+      val bcTokens = sc.broadcast(tokens)
+
+      val joinedTfIdf = tfidfRDD.map(kv => {
+        val term = kv._1
+        val documentScore = kv._2
+        val value = bcTokens.value.get(kv._1)
+        val res =
+          if (value.isDefined)
+            value.get
+          else
+          -1
+        (term, res, documentScore)
+      } ).filter(kvs => kvs._2 != -1 )
+
+      //compute the score using aggregateByKey
+      val scount = joinedTfIdf.map(a =>  a._3).aggregateByKey((0.0,0))(
+        ((acc, v) => (acc._1 + v, acc._2 + 1)),
+        ((acc1,acc2) =>  (acc1._1 + acc2._1, acc1._2 + acc2._2) ))
+
+      val topMatches = scount.map(kv =>  ( kv._2._1 * kv._2._2 / tokens.size, kv._1) ).top(10)
+      //val redusedData = rescaledData.filter($"")
 
 
+      //val topMatches =
+      if (topMatches.isEmpty)
+        println("Couldn't find any relevant documents")
+      else {
+        println(s"Top results:")
+        topMatches.foreach(println)
+      }
+    }
+
+
+  }
+
+  def tokenize(line : String, stopWords : Iterator[String]) : Array[String] = {
+    line.split(" ").filter(p => p != "" && !stopWords.contains(p))
   }
   /**
     * Represents a parsed Wikipedia page from the Wikipedia XML dump
@@ -65,7 +142,7 @@ object HelloSpark {
     * @param isFile Is the page a file page, not perfectly accurate
     * @param isTemplate Is the page a template page, not perfectly accurate
     */
-  case class Page(id:String, title: String, text: String)
+  case class Page(var id:String, var title: String, var text: String)
 
   /**
     * A helper class that allows for a WikiArticle to be serialized and also pulled from the XML parser
