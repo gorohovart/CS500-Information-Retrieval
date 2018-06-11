@@ -17,7 +17,6 @@ import org.htmlcleaner.HtmlCleaner
 import org.xml.sax.SAXException
 
 import scala.io.Source
-import org.apache.spark.ml.feature.{HashingTF, IDF, Tokenizer}
 
 object HelloSpark {
   def main(args: Array[String]): Unit = {
