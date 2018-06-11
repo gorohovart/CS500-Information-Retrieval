@@ -29,9 +29,29 @@ object HelloSpark {
     val sc    = new SparkContext( conf )
     //val qwe = new java.io.File(".").getCanonicalPath
     //val path = "file://" +"wikidump.xml".getPath
-    val rawpages = readWikiDump(sc, "ruwiki-20180420-pages-articles-multistream.xml")
+    val stopWords = Source.fromFile(filename).getLines
+    val rawpages = readWikiDump(sc, "ruwiki-20180520-pages-articles-multistream.xml")
+    //rawpages.saveAsTextFile("rubackup")
 
-    println(parsePages(rawpages).count().toString())
+    val pages = parsePages(rawpages)
+      .map(x,y => y.text.split(" ").filter(x => ))
+
+    val hashingTF = new HashingTF()
+    val tf: RDD[Vector] = hashingTF.transform(pages)
+
+    // While applying HashingTF only needs a single pass to the data, applying IDF needs two passes:
+    // First to compute the IDF vector and second to scale the term frequencies by IDF.
+    tf.cache()
+    val idf = new IDF().fit(tf)
+    val tfidf: RDD[Vector] = idf.transform(tf)
+
+    // spark.mllib IDF implementation provides an option for ignoring terms which occur in less than
+    // a minimum number of documents. In such cases, the IDF for these terms is set to 0.
+    // This feature can be used by passing the minDocFreq value to the IDF constructor.
+    val idfIgnore = new IDF(minDocFreq = 2).fit(tf)
+    val tfidfIgnore: RDD[Vector] = idfIgnore.transform(tf)
+
+
   }
   /**
     * Represents a parsed Wikipedia page from the Wikipedia XML dump
@@ -45,7 +65,7 @@ object HelloSpark {
     * @param isFile Is the page a file page, not perfectly accurate
     * @param isTemplate Is the page a template page, not perfectly accurate
     */
-  case class Page(title: String, text: String, isCategory: Boolean , isFile: Boolean, isTemplate: Boolean)
+  case class Page(id:String, title: String, text: String)
 
   /**
     * A helper class that allows for a WikiArticle to be serialized and also pulled from the XML parser
@@ -92,9 +112,8 @@ object HelloSpark {
         }
         val page = wrappedPage.page
         if (page.getText != null && page.getTitle != null
-          && page.getId != null && page.getRevisionId != null
-          && page.getTimeStamp != null) {
-          Some(Page(page.getTitle, page.getText, page.isCategory, page.isFile, page.isTemplate))
+          && page.getId != null) {
+          Some(Page(page.getId,page.getTitle, page.getText))
         } else {
           None
         }
