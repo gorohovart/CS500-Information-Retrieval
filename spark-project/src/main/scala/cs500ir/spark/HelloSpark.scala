@@ -31,24 +31,25 @@ object HelloSpark {
       .set("spark.executor.memory", "2g")
 
     val sc    = new SparkContext( conf )
-    //import sc.implicits._
-    //val qwe = new java.io.File(".").getCanonicalPath
-    //val path = "file://" +"wikidump.xml".getPath
     val stopWords = Source.fromFile("stopWords.txt").getLines()
-    val rawpages = readWikiDump(sc, "ruwiki-20180420-pages-articles-multistream.xml")
-    //rawpages.saveAsTextFile("rubackup")
 
-    val pages = parsePages(rawpages)
-    //val filteredPages =
-    //  pages.values.map(y =>
-    //    (y.id,
-    //      (y.title,
-    //       y.text.split(" ").filter(p=> p != "" && !stopWords.contains(p)))))
+    val compute = true
+
+    val pages =
+      if (compute) {
+        val rawpages = readWikiDump(sc, "ruwiki.xml")
+        val pages = parsePages(rawpages)
+        pages.saveAsObjectFile("pages")
+        pages
+      }
+      else{
+        sc.sequenceFile("pages/part-*", classOf[Long], classOf[HelloSpark.Page])
+      }
 
     val numberOfDocs = pages.count()
 
     val filteredPages =
-      pages.values.flatMap(y => tokenize(y.text, stopWords).map( s => (y.title,s)))//.toDF()
+      pages.values.map(y => tokenize(y.text, stopWords).map( s => (y.title,s))).flatMap(x=>x)//.toDF()
 
     val termFrequency = filteredPages.countByValue()
 
@@ -68,21 +69,6 @@ object HelloSpark {
     })
 
     val tfidfRDD = sc.parallelize(tfIdf.toSeq)
-
-    /*val dataframe = sparkSession.createDataFrame(filteredPages).toDF("id", "title", "words")
-
-    val hashingTF = new HashingTF()
-      .setInputCol("words").setOutputCol("rawFeatures").setNumFeatures(20)
-
-    val featurizedData = hashingTF.transform(dataframe)
-    // alternatively, CountVectorizer can also be used to get term frequency vectors
-
-    val idf = new IDF().setInputCol("rawFeatures").setOutputCol("features")
-    val idfModel = idf.fit(featurizedData)
-
-    val rescaledData = idfModel.transform(featurizedData)
-    //rescaledData.select("label", "features").show()
-*/
     while (true) {
       println()
       println("Enter a sentence or 'q' to quit")
@@ -106,16 +92,12 @@ object HelloSpark {
         (term, res, documentScore)
       } ).filter(kvs => kvs._2 != -1 )
 
-      //compute the score using aggregateByKey
       val scount = joinedTfIdf.map(a =>  a._3).aggregateByKey((0.0,0))(
-        ((acc, v) => (acc._1 + v, acc._2 + 1)),
-        ((acc1,acc2) =>  (acc1._1 + acc2._1, acc1._2 + acc2._2) ))
+        (acc, v) => (acc._1 + v, acc._2 + 1),
+        (acc1,acc2) =>  (acc1._1 + acc2._1, acc1._2 + acc2._2) )
 
       val topMatches = scount.map(kv =>  ( kv._2._1 * kv._2._2 / tokens.size, kv._1) ).top(10)
-      //val redusedData = rescaledData.filter($"")
 
-
-      //val topMatches =
       if (topMatches.isEmpty)
         println("Couldn't find any relevant documents")
       else {
