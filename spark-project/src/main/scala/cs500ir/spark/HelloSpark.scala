@@ -16,7 +16,7 @@ import org.apache.spark.rdd.{PairRDDFunctions, RDD}
 import org.htmlcleaner.HtmlCleaner
 import org.xml.sax.SAXException
 
-import scala.io.Source
+import scala.io
 
 object HelloSpark {
   def main(args: Array[String]): Unit = {
@@ -27,29 +27,30 @@ object HelloSpark {
     //  .getOrCreate()
 
     val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
-      .set("spark.executor.memory", "2g")
+      .set("spark.executor.memory", "5g").set("spark.driver.memory", "5g")
 
     val sc    = new SparkContext( conf )
-    val stopWords = Source.fromFile("stopWords.txt").getLines()
+    val stopWords = readFile("stopWords.txt")
 
     val compute = true
 
-    val pages =
+    val pages : RDD[(String,String)] =
       if (compute) {
         val rawpages = readWikiDump(sc, "ruwiki.xml")
-        val pages = parsePages(rawpages)
+        val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
         pages.saveAsObjectFile("pages")
         pages
       }
       else{
-        sc.sequenceFile("pages/part-*", classOf[Long], classOf[HelloSpark.Page])
+        sc.sequenceFile("pages/part-*", classOf[String], classOf[String])
       }
 
     val numberOfDocs = pages.count()
 
-    val filteredPages =
-      pages.values.map(y => tokenize(y.text, stopWords).map( s => (y.title,s))).flatMap(x=>x)//.toDF()
+    val filteredPages1 =
+      pages.map(y => tokenize(y._2, stopWords).map( s => (y._1,s)))//.flatMap(x=>x.toSeq)//.toDF()
 
+    val filteredPages = filteredPages1.flatMap(x=>x.toSeq)
     val termFrequency = filteredPages.countByValue()
 
     val documentToTerm = filteredPages.distinct().map( x => (x._2,x._1))
@@ -108,7 +109,7 @@ object HelloSpark {
 
   }
 
-  def tokenize(line : String, stopWords : Iterator[String]) : Array[String] = {
+  def tokenize(line : String, stopWords : Seq[String]) : Array[String] = {
     line.split(" ").filter(p => p != "" && !stopWords.contains(p))
   }
   /**
@@ -141,6 +142,13 @@ object HelloSpark {
     def process(page: WikiArticle, siteinfo: Siteinfo)  {
       wrappedPage.page = page
     }
+  }
+
+  def readFile(filename: String): Seq[String] = {
+    val bufferedSource = io.Source.fromFile(filename)
+    val lines = (for (line <- bufferedSource.getLines()) yield line).toList
+    bufferedSource.close
+    lines
   }
 
   /**
