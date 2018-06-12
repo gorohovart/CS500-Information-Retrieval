@@ -17,6 +17,7 @@ import org.htmlcleaner.HtmlCleaner
 import org.xml.sax.SAXException
 
 import scala.io
+import java.io.File
 
 object HelloSpark {
   def main(args: Array[String]): Unit = {
@@ -26,11 +27,16 @@ object HelloSpark {
     //  .config("spark.master", "local")
     //  .getOrCreate()
 
-    val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
-      .set("spark.executor.memory", "5g").set("spark.driver.memory", "5g")
 
-    val sc    = new SparkContext( conf )
+
+    val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
+      .set("spark.executor.memory", "2g")//.set("spark.driver.memory", "2g")
+
+    val sc = new SparkContext( conf )
     val stopWords = readFile("stopWords.txt")
+
+    //stopWords.foreach(x=> println("file:" + x))
+    //tokenize("British hurdler Sarah Claxton is confident she can win her first major medal at next month's European Indoor Championships in Madrid.", stopWords).foreach( x=> println("file:" + x))
 
     val compute = true
 
@@ -38,19 +44,36 @@ object HelloSpark {
       if (compute) {
         val rawpages = readWikiDump(sc, "ruwiki.xml")
         val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
-        pages.saveAsObjectFile("pages")
+        //pages.saveAsObjectFile("pages")
         pages
       }
       else{
+
         sc.sequenceFile("pages/part-*", classOf[String], classOf[String])
+/*
+        val files : List[File] = {
+          val d = new File("sport")
+          if (d.exists && d.isDirectory) {
+            d.listFiles.filter(_.isFile).toList
+          } else {
+            List[File]()
+          }
+        }
+        sc.parallelize(files.map(f => (f.getName, scala.io.Source.fromFile("sport/" + f.getName, "UTF-8").mkString)))
+        */
       }
 
     val numberOfDocs = pages.count()
+
+    pages.top(2).foreach( x=> println("file:" + x._1+ " term:" + x._2))
 
     val filteredPages1 =
       pages.map(y => tokenize(y._2, stopWords).map( s => (y._1,s)))//.flatMap(x=>x.toSeq)//.toDF()
 
     val filteredPages = filteredPages1.flatMap(x=>x.toSeq)
+
+    filteredPages.top(20).foreach( x=> println("file:" + x._1+ " term:" + x._2))
+
     val termFrequency = filteredPages.countByValue()
 
     val documentToTerm = filteredPages.distinct().map( x => (x._2,x._1))
@@ -69,6 +92,9 @@ object HelloSpark {
     })
 
     val tfidfRDD = sc.parallelize(tfIdf.toSeq)
+
+    tfidfRDD.top(20).foreach( x=> println("term:" + x._1+ " doc:" + x._2._1 + " score: "+ x._2._2.toString))
+
     while (true) {
       println()
       println("Enter a sentence or 'q' to quit")
@@ -110,7 +136,7 @@ object HelloSpark {
   }
 
   def tokenize(line : String, stopWords : Seq[String]) : Array[String] = {
-    line.split(" ").filter(p => p != "" && !stopWords.contains(p))
+    line.toLowerCase.split(" ").map(x => x.trim).filter(p => p != "" && !stopWords.contains(p))
   }
   /**
     * Represents a parsed Wikipedia page from the Wikipedia XML dump
