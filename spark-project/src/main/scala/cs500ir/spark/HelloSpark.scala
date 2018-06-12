@@ -15,6 +15,8 @@ import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.{PairRDDFunctions, RDD}
 import org.htmlcleaner.HtmlCleaner
 import org.xml.sax.SAXException
+import org.apache.spark.rdd.RDD
+
 
 import scala.io
 import java.io.File
@@ -39,77 +41,75 @@ object HelloSpark {
     //stopWords.foreach(x=> println("file:" + x))
     //tokenize("British hurdler Sarah Claxton is confident she can win her first major medal at next month's European Indoor Championships in Madrid.", stopWords).foreach( x=> println("file:" + x))
 
-    val parse = true
+    val parse = false
     val compute = true
 
-    if (compute) {
+    val tfidfRDD : RDD[(String, (String, Double))] = {
+      if (compute) {
 
-      val pages: RDD[(String, String)] =
-        if (parse) {
-          //val rawpages = readWikiDump(sc, "ruwiki.xml")
-          //val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
-          val rawpages = readWikiDump(sc, "ruwiki.xml")
-          //.top(10)
-          val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
-          val pagesOnlyWords = pages.map(x => (x._1.filter(x => x != ','), tokenize(x._2, stopWords).mkString(" ")))
-          pagesOnlyWords.saveAsTextFile("pages")
-          pagesOnlyWords
-        }
-        else {
-
-          sc.textFile("pages/part-*").map(x => x.split(',')).map(x => (x(0), x(1))) //, classOf[String], classOf[String])
-          /*
-          val files : List[File] = {
-            val d = new File("sport")
-            if (d.exists && d.isDirectory) {
-              d.listFiles.filter(_.isFile).toList
-            } else {
-              List[File]()
-            }
+        val pages: RDD[(String, String)] =
+          if (parse) {
+            //val rawpages = readWikiDump(sc, "ruwiki.xml")
+            //val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
+            val rawpages = readWikiDump(sc, "ruwiki.xml")
+            //.top(10)
+            val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
+            val pagesOnlyWords = pages.map(x => (x._1.filter(x => x != ','), tokenize(x._2, stopWords).mkString(" ")))
+            pagesOnlyWords.saveAsTextFile("pages")
+            pagesOnlyWords
           }
-          sc.parallelize(files.map(f => (f.getName, scala.io.Source.fromFile("sport/" + f.getName, "UTF-8").mkString)))
-          */
-        }
+          else {
 
-      val numberOfDocs = pages.count()
+            sc.textFile("pages/part-*").map(x => x.split(',')).map(x => (x(0), x(1))) //, classOf[String], classOf[String])
+            /*
+            val files : List[File] = {
+              val d = new File("sport")
+              if (d.exists && d.isDirectory) {
+                d.listFiles.filter(_.isFile).toList
+              } else {
+                List[File]()
+              }
+            }
+            sc.parallelize(files.map(f => (f.getName, scala.io.Source.fromFile("sport/" + f.getName, "UTF-8").mkString)))
+            */
+          }
 
-      //println("Documents example:")
-      //pages.top(2).foreach( x=> println("file:" + x._1+ " doc:" + x._2))
+        val numberOfDocs = pages.count()
+        /// term, doc
+        val filteredPages =
+          pages.flatMap(y => y._2.split(" ").map(s => ((s, y._1), 1))) //.flatMap(x=>x.toSeq)//.toDF()
 
-      /// term,doc
-      val filteredPages =
-        pages.flatMap(y => y._2.split(" ").map(s => (s, y._1))) //.flatMap(x=>x.toSeq)//.toDF()
+        //val filteredPages = filteredPages1.flatMap(x=>x.toSeq)
 
-      //val filteredPages = filteredPages1.flatMap(x=>x.toSeq)
+        //println("Terms example:")
+        //filteredPages.foreach( x=> println("file:" + x._1+ " term:" + x._2))
 
-      //println("Terms example:")
-      //filteredPages.foreach( x=> println("file:" + x._1+ " term:" + x._2))
+        val termFrequency = filteredPages.reduceByKey(_+_)/*aggregateByKey(0)(
+              (acc, _) => acc + 1,
+              (acc1,acc2) =>  acc1 + acc2 )*/
+        //countByValue
 
-      val termFrequency = filteredPages.aggregateByKey(0)(
-            (acc, _) => acc + 1,
-            (acc1,acc2) =>  acc1 + acc2 )
+        val documentFrequency = termFrequency.map(x => (x._1._1, 1)).reduceByKey(_+_)//filteredPages.distinct().map(x => (x._2, x._1))
+        //val documentFrequency = documentToTerm.countByKey()
 
-      val documentToTerm = filteredPages.distinct().map(x => (x._2, x._1))
-      val documentFrequency = documentToTerm.countByKey()
-
-      val tfIdf = termFrequency.flatMap(x => {
-        val doc = x._1._1
-        val term = x._1._2
-        val tf = x._2
-        val df = documentFrequency.get(term)
-        if (df.isDefined && df.get > 0) {
-          val score = tf * scala.math.log(numberOfDocs / df.get)
-          Some(term, doc, score)
-        }
-        else None
-      })
-      /// term (doc, score)
-      val tfidfRDDtowrite = sc.parallelize(tfIdf.toSeq)
-
-      tfidfRDDtowrite.saveAsTextFile("tfidf")
+        val tfIdf = termFrequency.flatMap(x => {
+          val doc = x._1._2
+          val term = x._1._1
+          val tf = x._2
+          val df = documentFrequency.lookup(term)
+          if (df.nonEmpty) {
+            val score = tf * scala.math.log(numberOfDocs / df.head)
+            Some(term, doc, score)
+          }
+          else None
+        })
+        tfIdf.saveAsTextFile("tfidf")
+        tfIdf.map(x => (x._1, (x._2, x._3)))
+      }
+      else {
+        sc.textFile("./tfidf/part-*").map(x => x.split(',')).map(x => (x(0), (x(1), x(2).toDouble)))
+      }
     }
-    val tfidfRDD = sc.textFile("./tfidf/part-*").map(x => x.split(',')).map(x => (x(0), (x(1),x(2).toDouble)))
-
     //tfidfRDD.top(40).foreach( x=> println("term:" + x._1+ " doc:" + x._2._1 + " score: "+ x._2._2.toString))
 
     while (true) {
@@ -120,26 +120,14 @@ object HelloSpark {
         System.exit(0)
       println(s"Querying...")
 
-      val queryTokens = sc.parallelize(tokenize(input, stopWords)).map(x => (x,1)).collectAsMap()
-      val bcTokens = sc.broadcast(queryTokens)
+      val queryTokens = tokenize(input, stopWords).distinct.toSet
+      //val bcTokens = sc.broadcast(queryTokens)
 
-      val joinedTfIdf = tfidfRDD.map(kv => {
-        val term = kv._1
-        val documentScore = kv._2
-        val value = bcTokens.value.get(kv._1)
-        val res =
-          if (value.isDefined)
-            value.get
-          else
-          -1
-        (term, res, documentScore)
-      } ).filter(kvs => kvs._2 != -1 )
+      val filteredTfIdf = tfidfRDD.filter(kv => queryTokens.contains(kv._1))
+      /// scoreOfDocument, numberOfQueryTermsInDocument
+      val scount = filteredTfIdf.map(a => a._2).reduceByKey(_+_)
 
-      val scount = joinedTfIdf.map(a =>  a._3).aggregateByKey((0.0,0))(
-        (acc, v) => (acc._1 + v, acc._2 + 1),
-        (acc1,acc2) =>  (acc1._1 + acc2._1, acc1._2 + acc2._2) )
-
-      val topMatches = scount.map(kv =>  ( kv._2._1 * kv._2._2 / queryTokens.size, kv._1) ).top(10)
+      val topMatches = scount.map(kv =>  ( kv._2 * 1.0 / queryTokens.size, kv._1) ).top(10)
 
       if (topMatches.isEmpty)
         println("Couldn't find any relevant documents")
