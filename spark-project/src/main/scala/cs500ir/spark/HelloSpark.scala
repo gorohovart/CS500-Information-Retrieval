@@ -89,16 +89,16 @@ object HelloSpark {
               (acc1,acc2) =>  acc1 + acc2 )*/
         //countByValue
 
-        val documentFrequency = termFrequency.map(x => (x._1._1, 1)).reduceByKey(_+_)//filteredPages.distinct().map(x => (x._2, x._1))
+        val documentFrequency = termFrequency.map(x => (x._1._1, 1)).reduceByKey(_+_).collectAsMap()//filteredPages.distinct().map(x => (x._2, x._1))
         //val documentFrequency = documentToTerm.countByKey()
 
         val tfIdf = termFrequency.flatMap(x => {
           val doc = x._1._2
           val term = x._1._1
           val tf = x._2
-          val df = documentFrequency.lookup(term)
+          val df = documentFrequency.get(term)
           if (df.nonEmpty) {
-            val score = tf * scala.math.log(numberOfDocs / df.head)
+            val score = tf * scala.math.log(numberOfDocs / df.get)
             Some(term, doc, score)
           }
           else None
