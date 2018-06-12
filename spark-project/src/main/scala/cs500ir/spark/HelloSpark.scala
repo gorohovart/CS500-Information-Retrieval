@@ -38,67 +38,75 @@ object HelloSpark {
     //stopWords.foreach(x=> println("file:" + x))
     //tokenize("British hurdler Sarah Claxton is confident she can win her first major medal at next month's European Indoor Championships in Madrid.", stopWords).foreach( x=> println("file:" + x))
 
+    val parse = true
     val compute = true
 
-    val pages : RDD[(String,String)] =
-      if (compute) {
-        //val rawpages = readWikiDump(sc, "ruwiki.xml")
-        //val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
-        val rawpages = readWikiDump(sc, "ruwiki.xml")//.top(10)
-        val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
-        val pagesOnlyWords = pages.map(x => (x._1, tokenize(x._2, stopWords).mkString(" ")))
-        pagesOnlyWords.saveAsTextFile("pages")
-        pagesOnlyWords
-      }
-      else{
+    if (compute) {
 
-        sc.textFile("pages/part-*").map(x => x.split(',')).map(x => (x(0), x(1)))//, classOf[String], classOf[String])
-/*
-        val files : List[File] = {
-          val d = new File("sport")
-          if (d.exists && d.isDirectory) {
-            d.listFiles.filter(_.isFile).toList
-          } else {
-            List[File]()
-          }
+      val pages: RDD[(String, String)] =
+        if (parse) {
+          //val rawpages = readWikiDump(sc, "ruwiki.xml")
+          //val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
+          val rawpages = readWikiDump(sc, "ruwiki.xml")
+          //.top(10)
+          val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
+          val pagesOnlyWords = pages.map(x => (x._1.filter(x => x != ','), tokenize(x._2, stopWords).mkString(" ")))
+          pagesOnlyWords.saveAsTextFile("pages")
+          pagesOnlyWords
         }
-        sc.parallelize(files.map(f => (f.getName, scala.io.Source.fromFile("sport/" + f.getName, "UTF-8").mkString)))
-        */
-      }
+        else {
 
-    val numberOfDocs = pages.count()
+          sc.textFile("pages/part-*").map(x => x.split(',')).map(x => (x(0), x(1))) //, classOf[String], classOf[String])
+          /*
+          val files : List[File] = {
+            val d = new File("sport")
+            if (d.exists && d.isDirectory) {
+              d.listFiles.filter(_.isFile).toList
+            } else {
+              List[File]()
+            }
+          }
+          sc.parallelize(files.map(f => (f.getName, scala.io.Source.fromFile("sport/" + f.getName, "UTF-8").mkString)))
+          */
+        }
 
-    println("Documents example:")
-    pages.top(2).foreach( x=> println("file:" + x._1+ " doc:" + x._2))
+      val numberOfDocs = pages.count()
 
-    val filteredPages1 =
-      pages.map(y => y._2.split(" ").map( s => (y._1,s)))//.flatMap(x=>x.toSeq)//.toDF()
+      //println("Documents example:")
+      //pages.top(2).foreach( x=> println("file:" + x._1+ " doc:" + x._2))
 
-    val filteredPages = filteredPages1.flatMap(x=>x.toSeq)
+      val filteredPages =
+        pages.flatMap(y => y._2.split(" ").map(s => (y._1, s))) //.flatMap(x=>x.toSeq)//.toDF()
 
-    println("Terms example:")
-    filteredPages.foreach( x=> println("file:" + x._1+ " term:" + x._2))
+      //val filteredPages = filteredPages1.flatMap(x=>x.toSeq)
 
-    val termFrequency = filteredPages.countByValue()
+      //println("Terms example:")
+      //filteredPages.foreach( x=> println("file:" + x._1+ " term:" + x._2))
 
-    val documentToTerm = filteredPages.distinct().map( x => (x._2,x._1))
-    val documentFrequency = documentToTerm.countByKey()
+      val termFrequency = filteredPages.countByValue()
 
-    val tfIdf = termFrequency.flatMap( x => {
-      val doc = x._1._1
-      val term = x._1._2
-      val tf = x._2
-      val df = documentFrequency.get(term)
-      if (df.isDefined && df.get > 0){
-        val score = tf * scala.math.log(numberOfDocs / df.get)
-        Some(term, (doc,score))
-      }
-      else None
-    })
-    /// term (doc, score)
-    val tfidfRDD = sc.parallelize(tfIdf.toSeq)
+      val documentToTerm = filteredPages.distinct().map(x => (x._2, x._1))
+      val documentFrequency = documentToTerm.countByKey()
 
-    tfidfRDD.top(40).foreach( x=> println("term:" + x._1+ " doc:" + x._2._1 + " score: "+ x._2._2.toString))
+      val tfIdf = termFrequency.flatMap(x => {
+        val doc = x._1._1
+        val term = x._1._2
+        val tf = x._2
+        val df = documentFrequency.get(term)
+        if (df.isDefined && df.get > 0) {
+          val score = tf * scala.math.log(numberOfDocs / df.get)
+          Some(term, doc, score)
+        }
+        else None
+      })
+      /// term (doc, score)
+      val tfidfRDDtowrite = sc.parallelize(tfIdf.toSeq)
+
+      tfidfRDDtowrite.saveAsTextFile("tfidf")
+    }
+    val tfidfRDD = sc.textFile("./tfidf/part-*").map(x => x.split(',')).map(x => (x(0), (x(1),x(2))))
+
+    //tfidfRDD.top(40).foreach( x=> println("term:" + x._1+ " doc:" + x._2._1 + " score: "+ x._2._2.toString))
 
     while (true) {
       println()
