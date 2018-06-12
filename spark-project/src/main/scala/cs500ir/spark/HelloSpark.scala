@@ -42,14 +42,17 @@ object HelloSpark {
 
     val pages : RDD[(String,String)] =
       if (compute) {
-        val rawpages = readWikiDump(sc, "ruwiki.xml")
+        //val rawpages = readWikiDump(sc, "ruwiki.xml")
+        //val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
+        val rawpages = readWikiDump(sc, "ruwiki.xml")//.top(10)
         val pages = parsePages(rawpages).values.map(p => (p.title, p.text))
-        //pages.saveAsObjectFile("pages")
-        pages
+        val pagesOnlyWords = pages.map(x => (x._1, tokenize(x._2, stopWords).mkString(" ")))
+        pagesOnlyWords.saveAsTextFile("pages")
+        pagesOnlyWords
       }
       else{
 
-        sc.sequenceFile("pages/part-*", classOf[String], classOf[String])
+        sc.textFile("pages/part-*").map(x => x.split(',')).map(x => (x(0), x(1)))//, classOf[String], classOf[String])
 /*
         val files : List[File] = {
           val d = new File("sport")
@@ -65,14 +68,16 @@ object HelloSpark {
 
     val numberOfDocs = pages.count()
 
-    pages.top(2).foreach( x=> println("file:" + x._1+ " term:" + x._2))
+    println("Documents example:")
+    pages.top(2).foreach( x=> println("file:" + x._1+ " doc:" + x._2))
 
     val filteredPages1 =
-      pages.map(y => tokenize(y._2, stopWords).map( s => (y._1,s)))//.flatMap(x=>x.toSeq)//.toDF()
+      pages.map(y => y._2.split(" ").map( s => (y._1,s)))//.flatMap(x=>x.toSeq)//.toDF()
 
     val filteredPages = filteredPages1.flatMap(x=>x.toSeq)
 
-    filteredPages.top(20).foreach( x=> println("file:" + x._1+ " term:" + x._2))
+    println("Terms example:")
+    filteredPages.foreach( x=> println("file:" + x._1+ " term:" + x._2))
 
     val termFrequency = filteredPages.countByValue()
 
@@ -90,10 +95,10 @@ object HelloSpark {
       }
       else None
     })
-
+    /// term (doc, score)
     val tfidfRDD = sc.parallelize(tfIdf.toSeq)
 
-    tfidfRDD.top(20).foreach( x=> println("term:" + x._1+ " doc:" + x._2._1 + " score: "+ x._2._2.toString))
+    tfidfRDD.top(40).foreach( x=> println("term:" + x._1+ " doc:" + x._2._1 + " score: "+ x._2._2.toString))
 
     while (true) {
       println()
@@ -103,8 +108,8 @@ object HelloSpark {
         System.exit(0)
       println(s"Querying...")
 
-      val tokens = sc.parallelize(tokenize(input, stopWords)).map(x => (x,1)).collectAsMap()
-      val bcTokens = sc.broadcast(tokens)
+      val queryTokens = sc.parallelize(tokenize(input, stopWords)).map(x => (x,1)).collectAsMap()
+      val bcTokens = sc.broadcast(queryTokens)
 
       val joinedTfIdf = tfidfRDD.map(kv => {
         val term = kv._1
@@ -122,7 +127,7 @@ object HelloSpark {
         (acc, v) => (acc._1 + v, acc._2 + 1),
         (acc1,acc2) =>  (acc1._1 + acc2._1, acc1._2 + acc2._2) )
 
-      val topMatches = scount.map(kv =>  ( kv._2._1 * kv._2._2 / tokens.size, kv._1) ).top(10)
+      val topMatches = scount.map(kv =>  ( kv._2._1 * kv._2._2 / queryTokens.size, kv._1) ).top(10)
 
       if (topMatches.isEmpty)
         println("Couldn't find any relevant documents")
@@ -136,7 +141,7 @@ object HelloSpark {
   }
 
   def tokenize(line : String, stopWords : Seq[String]) : Array[String] = {
-    line.toLowerCase.split(" ").map(x => x.trim).filter(p => p != "" && !stopWords.contains(p))
+    line.filter(ch => ch.isLetterOrDigit || ch == ' ').toLowerCase.split(" ").map(x => x.trim).filter(p => p != "" && !stopWords.contains(p))
   }
   /**
     * Represents a parsed Wikipedia page from the Wikipedia XML dump
@@ -205,7 +210,9 @@ object HelloSpark {
         val page = wrappedPage.page
         if (page.getText != null && page.getTitle != null
           && page.getId != null) {
-          Some(Page(page.getId,page.getTitle, page.getText))
+          val text = page.getText
+          if (text.startsWith("#REDIRECT")) None
+          else Some(Page(page.getId,page.getTitle, page.getText))
         } else {
           None
         }
