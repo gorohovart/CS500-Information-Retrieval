@@ -30,7 +30,8 @@ object HelloSpark {
 
 
     val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
-      .set("spark.executor.memory", "2g")//.set("spark.driver.memory", "2g")
+      .set("spark.executor.memory", "5g")
+      .set("spark.driver.maxResultSize", "5g")//.set("spark.driver.memory", "2g")
 
     val sc = new SparkContext( conf )
     val stopWords = readFile("stopWords.txt")
@@ -75,15 +76,18 @@ object HelloSpark {
       //println("Documents example:")
       //pages.top(2).foreach( x=> println("file:" + x._1+ " doc:" + x._2))
 
+      /// term,doc
       val filteredPages =
-        pages.flatMap(y => y._2.split(" ").map(s => (y._1, s))) //.flatMap(x=>x.toSeq)//.toDF()
+        pages.flatMap(y => y._2.split(" ").map(s => (s, y._1))) //.flatMap(x=>x.toSeq)//.toDF()
 
       //val filteredPages = filteredPages1.flatMap(x=>x.toSeq)
 
       //println("Terms example:")
       //filteredPages.foreach( x=> println("file:" + x._1+ " term:" + x._2))
 
-      val termFrequency = filteredPages.countByValue()
+      val termFrequency = filteredPages.aggregateByKey(0)(
+            (acc, _) => acc + 1,
+            (acc1,acc2) =>  acc1 + acc2 )
 
       val documentToTerm = filteredPages.distinct().map(x => (x._2, x._1))
       val documentFrequency = documentToTerm.countByKey()
