@@ -104,7 +104,7 @@ object HelloSpark {
 
       tfidfRDDtowrite.saveAsTextFile("tfidf")
     }
-    val tfidfRDD = sc.textFile("./tfidf/part-*").map(x => x.split(',')).map(x => (x(0), (x(1),x(2))))
+    val tfidfRDD = sc.textFile("./tfidf/part-*").map(x => x.split(',')).map(x => (x(0), (x(1),x(2).toDouble)))
 
     //tfidfRDD.top(40).foreach( x=> println("term:" + x._1+ " doc:" + x._2._1 + " score: "+ x._2._2.toString))
 
