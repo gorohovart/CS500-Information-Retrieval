@@ -1,6 +1,6 @@
 package cs500ir.spark
 
-import java.io.ByteArrayInputStream
+import java.io.{BufferedWriter, ByteArrayInputStream, File, FileWriter}
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.SparkContext._
@@ -17,9 +17,7 @@ import org.htmlcleaner.HtmlCleaner
 import org.xml.sax.SAXException
 import org.apache.spark.rdd.RDD
 
-
 import scala.io
-import java.io.File
 
 object WikiSearch {
   def main(args: Array[String]): Unit = {
@@ -130,7 +128,7 @@ object WikiSearch {
   def tokenize(line : String, stopWords : Seq[String]) : Array[String] = {
     line.map(ch => if (ch.isLetterOrDigit) {ch} else {' '})
         .split(" ")
-        .filter(p => p != "" && !stopWords.contains(p))
+        .filter(p => p != "" && !stopWords.contains(p) && p.length > 2)
   }
 
   case class Page(var id:String, var title: String, var text: String)
