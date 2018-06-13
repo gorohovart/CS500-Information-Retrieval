@@ -17,22 +17,39 @@ import org.htmlcleaner.HtmlCleaner
 import org.xml.sax.SAXException
 import org.apache.spark.rdd.RDD
 
+import info.bliki.api.XMLPagesParser
+import org.apache.spark.ml.feature.{HashingTF, IDF}
 import scala.io
 
+
 object WikiSearch {
+  var stopWords : Set[String] = readFile("stopWords.txt").toSet
+
   def main(args: Array[String]): Unit = {
-    val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
+
+    val sparkSession = SparkSession
+      .builder()
+      .appName("WikiSearch")
+      .config("spark.master", "local")
+      .getOrCreate()
+
+    val conf = sparkSession.conf
+
+    conf.set("spark.executor.memory", "10g")
+    conf.set("spark.driver.maxResultSize", "10g")
+    conf.set("spark.driver.memory", "10g")
+    /*val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
       .set("spark.executor.memory", "10g")
       .set("spark.driver.maxResultSize", "10g")
+    */
+    val sc = sparkSession.sparkContext//new SparkContext( conf )
 
-    val sc = new SparkContext( conf )
-    val stopWords = readFile("stopWords.txt")
     val parse = true
     val compute = true
 
     val tfidfRDD : RDD[(String, (String, Double))] = {
       if (compute)
-        tfIDFcompute(sc,compute, stopWords)
+        tfIDFcompute(sc,parse)
       else
         tfIDFload(sc)
     }
@@ -46,7 +63,7 @@ object WikiSearch {
         System.exit(0)
       println(s"Querying...")
 
-      val queryTokens = tokenize(input, stopWords).distinct.toSet
+      val queryTokens =  tokenize(input).distinct.toSet
 
       val filteredTfIdf = tfidfRDD.filter(kv => queryTokens.contains(kv._1))
 
@@ -68,70 +85,88 @@ object WikiSearch {
     sc.textFile("./tfidf/part-*").map(x => x.split(',')).map(x => (x(0), (x(1), x(2).toDouble)))
   }
 
-  def tfIDFcompute(sc:SparkContext, needToParse : Boolean, stopWords: Seq[String]) = {
-    val pages: RDD[(String, String)] =
-      if (needToParse) {
-        val rawpages = readWikiDump(sc, "ruwiki.xml")
-        val pages = parsePages(rawpages)
-                    .values
-                    .map(p => (p.title, p.text))
-        val pagesOnlyWords = pagesToWords(pages, stopWords)
-        pagesOnlyWords.saveAsTextFile("pages")
-        pagesOnlyWords
-      }
-      else {
-        sc.textFile("pages/part-*")
-          .map(x => {
-            val y = x.split(',')
-            (y(0), y(1))
-          })
-      }
+  def getPages(sc:SparkContext, needToParse : Boolean) : RDD[(String, Seq[String])] = {
+    if (needToParse) {
+      val rawpages = readWikiDump(sc, "ruwiki.xml")
+      val pages = parsePages(rawpages)
+      val pagesOnlyWords = pagesToWords(pages)
+      pagesOnlyWords.saveAsTextFile("pages")
+    }
+    sc.textFile("pages/part-*")
+      .map(x => {
+        val y = x.split(',')
+        (y(0), y(1).split(" "))
+      })
+  }
+  /*
+  def tfIDFcomputeDefault(session:SparkSession, needToParse : Boolean, stopWords: Seq[String]) =  {
+    val pages = getPages(session.sparkContext,needToParse, stopWords)
+    import session.implicits._
+    val pagesDF = pages.toDF("document", "words")
 
+    val hashingTF = new HashingTF().setInputCol("words").setOutputCol("rawFeatures").setNumFeatures(20)
+
+    val featurizedData = hashingTF.transform(pagesDF)
+    // alternatively, CountVectorizer can also be used to get term frequency vectors
+
+    val idf = new IDF().setInputCol("rawFeatures").setOutputCol("features").setMinDocFreq(2)
+    val idfModel = idf.fit(featurizedData)
+
+    val rescaledData = idfModel.transform(featurizedData)
+    rescaledData.select("label", "features").show()
+  }
+  */
+
+  def tfIDFcompute(sc:SparkContext, needToParse : Boolean) = {
+    val pages = getPages(sc,needToParse)
     val numberOfDocs = pages.count()
 
+    val numberOfWordsInDoc =
+      pages.map( x => (x._1, x._2.length)).collectAsMap()
+
+    // сколько раз встречается слово в документе
     val termFrequency =
       pages
-        .flatMap(y => y._2.split(" ")
-                          .map(s => ((s, y._1), 1))
-                )
+        .flatMap { case (docName, content) => content.map(word => ((word, docName), 1))}
         .reduceByKey(_+_)
+        .filter{ case ((term,doc),tf) => tf > 2}
 
+    // сколько слово встречается во всём корпусе
     val documentFrequency =
       termFrequency
-        .map(x => (x._1._1, 1))
+        .map{ case ((word,_),_) => (word, 1)}
         .reduceByKey(_+_)
         .collectAsMap()
 
-    val tfIdf = termFrequency.flatMap(x => {
-      val term = x._1._1
-      val doc = x._1._2
-      val tf = x._2
-      val df = documentFrequency.get(term)
-      if (df.nonEmpty) {
-        val score = tf * scala.math.log(numberOfDocs / df.get)
-        Some(term, doc, score)
-      }
-      else None
-    })
+    val tfIdf = termFrequency.flatMap{ case ((term,doc),tf) => {
+        val df = documentFrequency.get(term)
+        if (df.nonEmpty) {
+          val score = tf * scala.math.log(numberOfDocs / df.get) / numberOfWordsInDoc(doc)
+          if (score < 5.0)
+            None
+          else
+            Some(term, doc, score)
+        }
+        else None
+    }}
 
     tfIdf.saveAsTextFile("tfidf")
     tfIdf.map(x => (x._1, (x._2, x._3)))
   }
 
-  def pagesToWords(pages: RDD[(String, String)], stopWords : Seq[String]) = {
+  def pagesToWords(pages: RDD[(String, String)]) = {
     pages.map(x => {
       val name = x._1.filter(x => x != ',')
-      (name, tokenize(name + x._2, stopWords).mkString(" "))
+      (name, tokenize(name + x._2).mkString(" "))
     })
   }
 
-  def tokenize(line : String, stopWords : Seq[String]) : Array[String] = {
+  def tokenize(line : String) : Array[String] = {
     line.map(ch => if (ch.isLetterOrDigit) {ch} else {' '})
-        .split(" ")
-        .filter(p => p != "" && !stopWords.contains(p) && p.length > 2)
+      .split(" ")
+      .filter(p => p != "" && !stopWords.contains(p) && p.length > 2)
   }
 
-  case class Page(var id:String, var title: String, var text: String)
   case class WrappedPage(var page: WikiArticle = new WikiArticle) {}
   class SetterArticleFilter(val wrappedPage: WrappedPage) extends IArticleFilter {
     @throws(classOf[SAXException])
@@ -155,28 +190,29 @@ object WikiSearch {
     rdd.map{case (k,v) => (k.get(), new String(v.copyBytes()))}
   }
 
-  def parsePages(rdd: RDD[(Long, String)]): RDD[(Long, Page)] = {
-    rdd.mapValues{
-      text => {
-        val wrappedPage = new WrappedPage
-        //The parser occasionally exceptions out, we ignore these
-        try {
-          val parser = new WikiXMLParser(new ByteArrayInputStream(text.getBytes), new SetterArticleFilter(wrappedPage))
-          parser.parse()
-        } catch {
-          case e: Exception =>
-        }
-        val page = wrappedPage.page
-        if (page.getText != null && page.getTitle != null
-          && page.getId != null) {
-          val text = page.getText.toLowerCase
-          if (text.startsWith("#redirect") || text.startsWith("#перенаправление")) None
-          else Some(Page(page.getId,page.getTitle, page.getText))
-        } else {
-          None
-        }
+  def parsePages(rdd: RDD[(Long, String)]): RDD[(String, String)] = {
+    rdd.flatMap( t => {
+      val text = t._2
+      val wrappedPage = new WrappedPage
+      //The parser occasionally exceptions out, we ignore these
+      try {
+        val parser = new WikiXMLParser(new ByteArrayInputStream(text.getBytes), new SetterArticleFilter(wrappedPage))
+        parser.parse()
+      } catch {
+        case e: Exception =>
       }
-    }.flatMapValues(_.toSeq)
+      val page = wrappedPage.page
+      if (page.getText != null && page.getTitle != null
+        && page.getId != null) {
+        val text = page.getText.toLowerCase
+        if (text.startsWith("#redirect") || text.startsWith("#перенаправление")) None
+        else Some((page.getTitle, text))
+      } else {
+        None
+      }
+    }
+    )
   }
+
 
 }
