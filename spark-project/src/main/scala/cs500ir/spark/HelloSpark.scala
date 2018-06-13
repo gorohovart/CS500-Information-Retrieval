@@ -32,8 +32,8 @@ object HelloSpark {
 
 
     val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
-      .set("spark.executor.memory", "5g")
-      .set("spark.driver.maxResultSize", "5g")//.set("spark.driver.memory", "2g")
+      .set("spark.executor.memory", "10g")
+      .set("spark.driver.maxResultSize", "10g")//.set("spark.driver.memory", "2g")
 
     val sc = new SparkContext( conf )
     val stopWords = readFile("stopWords.txt")
@@ -84,7 +84,9 @@ object HelloSpark {
         //println("Terms example:")
         //filteredPages.foreach( x=> println("file:" + x._1+ " term:" + x._2))
 
-        val termFrequency = filteredPages.reduceByKey(_+_)/*aggregateByKey(0)(
+        val termFrequency = filteredPages.reduceByKey(_+_)
+        termFrequency.saveAsTextFile("termFrequency")
+        /*aggregateByKey(0)(
               (acc, _) => acc + 1,
               (acc1,acc2) =>  acc1 + acc2 )*/
         //countByValue
@@ -93,8 +95,8 @@ object HelloSpark {
         //val documentFrequency = documentToTerm.countByKey()
 
         val tfIdf = termFrequency.flatMap(x => {
-          val doc = x._1._2
           val term = x._1._1
+          val doc = x._1._2
           val tf = x._2
           val df = documentFrequency.get(term)
           if (df.nonEmpty) {
@@ -103,6 +105,7 @@ object HelloSpark {
           }
           else None
         })
+
         tfIdf.saveAsTextFile("tfidf")
         tfIdf.map(x => (x._1, (x._2, x._3)))
       }
