@@ -129,7 +129,6 @@ object WikiSearch {
 
   def tokenize(line : String, stopWords : Seq[String]) : Array[String] = {
     line.map(ch => if (ch.isLetterOrDigit) {ch} else {' '})
-        .toLowerCase
         .split(" ")
         .filter(p => p != "" && !stopWords.contains(p))
   }
