@@ -29,29 +29,29 @@ object WikiSearch {
 
   def main(args: Array[String]): Unit = {
 
-    val sparkSession = SparkSession
-      .builder()
-      .appName("WikiSearch")
-      .config("spark.master", "local")
-      .getOrCreate()
+    //val sparkSession = SparkSession
+    //  .builder()
+     // .appName("WikiSearch")
+     // .config("spark.master", "local")
+     // .getOrCreate()
 
-    val conf = sparkSession.conf
+    //val conf = sparkSession.conf
 
-    conf.set("spark.executor.memory", "10g")
-    conf.set("spark.driver.maxResultSize", "10g")
-    conf.set("spark.driver.memory", "10g")
-    /*val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
-      .set("spark.executor.memory", "10g")
-      .set("spark.driver.maxResultSize", "10g")
-    */
-    val sc = sparkSession.sparkContext//new SparkContext( conf )
+    //conf.set("spark.executor.memory", "5g")
+    //conf.set("spark.driver.maxResultSize", "5g")
+    //conf.set("spark.driver.memory", "5g")
+    val conf = new SparkConf().setAppName( "SparkTest" ).setMaster("local[*]" )
+      .set("spark.executor.memory", "3g")
+      .set("spark.driver.maxResultSize", "3g")
+
+    val sc = new SparkContext( conf ) //sparkSession.sparkContext//
 
     val parse = false
-    val compute = true
-    val tfidf = true
+    val compute = false
+    val tfidf = false
 
     if (compute)
-      tfIDFcompute(sparkSession,parse)
+      tfIDFcompute(sc,parse)
 
     if (tfidf) {
       val tfidfRDD: RDD[(String, (String, Int))] = tfIDFload(sc)
@@ -59,19 +59,13 @@ object WikiSearch {
       val tfIdfIntermed = tfidfRDD.aggregateByKey(List.empty[(String, Int)])(
         (x, y) => x :+ y,
         (x, y) => x ++ y
-      ).mapValues(docScoreList => docScoreList.sortBy { case (_, score) => -1 * score }.take(40))
+      ).mapValues(docScoreList => docScoreList.sortBy { case (_, score) => -1 * score }.take(10))
 
       tfIdfIntermed.saveAsObjectFile("tfIDFfiltered")
     }
 
     val tfIdfLoaded = sc.objectFile[(String, List[(String, Int)])]("tfIDFfiltered/part-*")
-
     val tfIdfMap = tfIdfLoaded.collectAsMap()
-
-    //tfIDFdf.write.text("tfIDFcsv")
-    //   (яловой List((Яловой,0.8425188542263876)  (Файл:Yalovoi Fedor Stepan.jpg,0.7428660865221912), (Файл:Yalovoy IP.jpg,0.7196515213183727)))
-
-    //val mapTFIDF = sparkSession.read.csv("tfIDFcsv")
 
     /// Query processing
     while (true) {
@@ -95,17 +89,7 @@ object WikiSearch {
           .groupBy{case (doc,_) => doc}
             .map{ case (doc, scores) => (doc, scores.map(x => x._2).sum)}
             .toSeq
-            .sortBy{case (_,s) => -1 * s}.take(20)
-
-      //val topMatches = filteredTFIDF.select("docScore").collect().map( x=> x.get(0)[(String, Double)]()).asInstanceOf[List[(String, Double)]]
-      /*
-      val filteredTfIdf = tfidfRDD.filter(kv => queryTokens.contains(kv._1))
-
-      /// scoreOfDocument, numberOfQueryTermsInDocument
-      val scount = filteredTfIdf.map(a => a._2).reduceByKey(_+_)
-
-      val topMatches = scount.map(kv =>  ( kv._2 * 1.0 / queryTokens.size, kv._1) ).top(10)
-      */
+            .sortBy{case (_,s) => -1 * s}.take(100)
 
       if (topMatches.isEmpty)
         println("Couldn't find any relevant documents")
@@ -118,7 +102,7 @@ object WikiSearch {
   }
 
   def tfIDFload(sc:SparkContext) = {
-    sc.textFile("./tfidf/part-*").map(x => x.filter(x => x != ')' && x != '(').split(',')).map(x => (x(0), (x(1), x(2).toInt)))
+    sc.objectFile[(String, (String, Int))]("./tfidf/part-*")//.map(x => x.filter(x => x != ')' && x != '(').split(',')).map(x => (x(0), (x(1), x(2).toInt)))
   }
 
   def getPages(sc:SparkContext, needToParse : Boolean) : RDD[(String, Seq[String])] = {
@@ -134,32 +118,11 @@ object WikiSearch {
         (y(0), y(1).split(" "))
       })
   }
-  /*
-  def tfIDFcomputeDefault(session:SparkSession, needToParse : Boolean, stopWords: Seq[String]) =  {
-    val pages = getPages(session.sparkContext,needToParse, stopWords)
-    import session.implicits._
-    val pagesDF = pages.toDF("document", "words")
 
-    val hashingTF = new HashingTF().setInputCol("words").setOutputCol("rawFeatures").setNumFeatures(20)
-
-    val featurizedData = hashingTF.transform(pagesDF)
-    // alternatively, CountVectorizer can also be used to get term frequency vectors
-
-    val idf = new IDF().setInputCol("rawFeatures").setOutputCol("features").setMinDocFreq(2)
-    val idfModel = idf.fit(featurizedData)
-
-    val rescaledData = idfModel.transform(featurizedData)
-    rescaledData.select("label", "features").show()
-  }
-  */
-
-  def tfIDFcompute(session:SparkSession, needToParse : Boolean) = {
-    val pages = getPages(session.sparkContext,needToParse)
+  def tfIDFcompute(sc:SparkContext, needToParse : Boolean) = {
+    val pages = getPages(sc,needToParse)
 
     val numberOfDocs = pages.count()
-
-    //val numberOfWordsInDoc =
-    //  pages.map( x => (x._1, x._2.length)).collectAsMap()
 
     // сколько раз встречается слово в документе
     val termFrequency =
@@ -180,61 +143,14 @@ object WikiSearch {
         .reduceByKey(_+_)
         .collectAsMap()
 
-    val statsScore = List(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0).toArray
-
-    termFrequency.foreach{ case (term,doc,tf) => {
-        val df = documentFrequency.get(term)
-        if (df.nonEmpty) {
-          val score = tf * scala.math.log(numberOfDocs / df.get) // numberOfWordsInDoc(doc)
-          var flag = true
-          var i = 100000.0
-          var j = 0
-          while (flag){
-            if (score > i || score < 0.00001) {
-              statsScore(j) += 1
-              flag = false
-            }
-            else{
-              j += 1
-              i = i / 10.0
-            }
-          }
-        }
-    }}
-
-    var flag = true
-    var prev = "inf"
-    var i = 100000.0
-    var j = 0
-    while (flag){
-      println(prev + " - " + i.toString + ":  " + statsScore(j).toString)
-      if (i < 0.00001) {
-        println(i.toString + " - inf: " + statsScore(j+1).toString)
-        flag = false
-      }
-      else{
-        j += 1
-        prev = i.toString
-        i = i / 10.0
-      }
-    }
-
-/*
-    val tfIdf = termFrequency.flatMap{ case (term,doc,tf) => {
+    termFrequency.flatMap{ case (term,doc,tf) => {
       val df = documentFrequency.get(term)
       if (df.nonEmpty) {
         val score = tf * scala.math.log(numberOfDocs / df.get) // numberOfWordsInDoc(doc)
-        if (score < 5)
-          None
-        else
-          Some(term, doc, (score*100).toInt)
+        Some(term, (doc, score.toInt))
       }
       else None
-    }}
-    */
-
-    //tfIdf.saveAsTextFile("tfidf")
-    //tfIdf.map(x => (x._1, (x._2, x._3)))
+    }}.saveAsTextFile("tfidf")
   }
 
   def pagesToWords(pages: RDD[(String, String)]) = {
