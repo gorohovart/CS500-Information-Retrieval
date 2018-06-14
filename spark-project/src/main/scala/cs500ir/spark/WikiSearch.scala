@@ -48,23 +48,28 @@ object WikiSearch {
 
     val parse = false
     val compute = true
+    val tfidf = true
 
     if (compute)
       tfIDFcompute(sparkSession,parse)
 
-    val tfidfRDD : RDD[(String, (String, Int))] = tfIDFload(sc)
+    if (tfidf) {
+      val tfidfRDD: RDD[(String, (String, Int))] = tfIDFload(sc)
 
-    //import sparkSession.implicits._
+      val tfIdfIntermed = tfidfRDD.aggregateByKey(List.empty[(String, Int)])(
+        (x, y) => x :+ y,
+        (x, y) => x ++ y
+      ).mapValues(docScoreList => docScoreList.sortBy { case (_, score) => -1 * score }.take(40))
 
-    val tfIdfMap = tfidfRDD.aggregateByKey(List.empty[(String,Int)])(
-      (x,y) => x :+ y,
-      (x,y) => x ++ y
-    ).mapValues( docScoreList => docScoreList.sortBy{case (_,score) => -1 * score}.take(40))
-      .collectAsMap()
+      tfIdfIntermed.saveAsObjectFile("tfIDFfiltered")
+    }
 
-    //tfIDFintermed.saveAsTextFile("tfIDFfiltered")
+    val tfIdfLoaded = sc.objectFile[(String, List[(String, Int)])]("tfIDFfiltered/part-*")
+
+    val tfIdfMap = tfIdfLoaded.collectAsMap()
 
     //tfIDFdf.write.text("tfIDFcsv")
+    //   (яловой List((Яловой,0.8425188542263876)  (Файл:Yalovoi Fedor Stepan.jpg,0.7428660865221912), (Файл:Yalovoy IP.jpg,0.7196515213183727)))
 
     //val mapTFIDF = sparkSession.read.csv("tfIDFcsv")
 
@@ -153,8 +158,8 @@ object WikiSearch {
 
     val numberOfDocs = pages.count()
 
-    val numberOfWordsInDoc =
-      pages.map( x => (x._1, x._2.length)).collectAsMap()
+    //val numberOfWordsInDoc =
+    //  pages.map( x => (x._1, x._2.length)).collectAsMap()
 
     // сколько раз встречается слово в документе
     val termFrequency =
@@ -175,19 +180,60 @@ object WikiSearch {
         .reduceByKey(_+_)
         .collectAsMap()
 
-    val tfIdf = termFrequency.flatMap{ case (term,doc,tf) => {
+    val statsScore = List(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0).toArray
+
+    termFrequency.foreach{ case (term,doc,tf) => {
         val df = documentFrequency.get(term)
         if (df.nonEmpty) {
-          val score = tf * scala.math.log(numberOfDocs / df.get) / numberOfWordsInDoc(doc)
-          if (score < 0.01)
-            None
-          else
-            Some(term, doc, (score*100).toInt)
+          val score = tf * scala.math.log(numberOfDocs / df.get) // numberOfWordsInDoc(doc)
+          var flag = true
+          var i = 100000.0
+          var j = 0
+          while (flag){
+            if (score > i || score < 0.00001) {
+              statsScore(j) += 1
+              flag = false
+            }
+            else{
+              j += 1
+              i = i / 10.0
+            }
+          }
         }
-        else None
     }}
 
-    tfIdf.saveAsTextFile("tfidf")
+    var flag = true
+    var prev = "inf"
+    var i = 100000.0
+    var j = 0
+    while (flag){
+      println(prev + " - " + i.toString + ":  " + statsScore(j).toString)
+      if (i < 0.00001) {
+        println(i.toString + " - inf: " + statsScore(j+1).toString)
+        flag = false
+      }
+      else{
+        j += 1
+        prev = i.toString
+        i = i / 10.0
+      }
+    }
+
+/*
+    val tfIdf = termFrequency.flatMap{ case (term,doc,tf) => {
+      val df = documentFrequency.get(term)
+      if (df.nonEmpty) {
+        val score = tf * scala.math.log(numberOfDocs / df.get) // numberOfWordsInDoc(doc)
+        if (score < 5)
+          None
+        else
+          Some(term, doc, (score*100).toInt)
+      }
+      else None
+    }}
+    */
+
+    //tfIdf.saveAsTextFile("tfidf")
     //tfIdf.map(x => (x._1, (x._2, x._3)))
   }
 
